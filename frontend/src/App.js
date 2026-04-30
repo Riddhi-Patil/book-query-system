@@ -1,16 +1,16 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import Navbar from './components/Navbar';
-import Dashboard from './pages/Dashboard';
-import BookDetail from './pages/BookDetail';
-import QAInterface from './pages/QAInterface';
+import { Route, BrowserRouter as Router, Routes } from 'react-router-dom';
 import './App.css';
+import Navbar from './components/Navbar';
+import BookDetail from './pages/BookDetail';
+import Dashboard from './pages/Dashboard';
+import QAInterface from './pages/QAInterface';
 
 function App() {
   return (
     <Router>
-      <div className="min-h-screen bg-gray-100">
+      <div className="min-h-screen">
         <Navbar />
-        <main className="py-8">
+        <main className="pb-20">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/book/:id" element={<BookDetail />} />

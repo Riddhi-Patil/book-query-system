@@ -37,6 +37,34 @@ def scrape_books(max_pages=5):
                 title_element = book.find_element(By.TAG_NAME, "h3").find_element(By.TAG_NAME, "a")
                 title = title_element.get_attribute("title")
                 link = title_element.get_attribute("href")
+                
+                # We need to visit the detail page to get the high-res image
+                # and actual description if we want better data.
+                # However, visiting every page is slow. Let's optimize by
+                # constructing the high-res image URL if possible.
+                # Thumbnail: .../media/cache/23/0d/230d1451a2333907b532742a7a71f076.jpg
+                # High-res:  .../media/cache/fe/72/fe72f0532301ec28892ae79a629a293c.jpg
+                # It seems we MUST visit the detail page to get the correct cache ID for the high-res image.
+                
+                # Open detail page in new tab or same tab
+                current_window = driver.current_window_handle
+                driver.execute_script(f"window.open('{link}', '_blank');")
+                driver.switch_to.window(driver.window_handles[-1])
+                time.sleep(0.5)
+                
+                try:
+                    # Get high-res image
+                    img_element = driver.find_element(By.CSS_SELECTOR, ".item.active img")
+                    img_url = img_element.get_attribute("src")
+                    
+                    # Get actual description
+                    try:
+                        description = driver.find_element(By.XPATH, "//div[@id='product_description']/following-sibling::p").text
+                    except:
+                        description = f"{title} is a book found on Books to Scrape."
+                finally:
+                    driver.close()
+                    driver.switch_to.window(current_window)
 
                 # Simple rating mapping
                 rating_element = book.find_element(By.CLASS_NAME, "star-rating")
@@ -48,16 +76,28 @@ def scrape_books(max_pages=5):
                         rating = float(r_val)
                         break
 
+                # AUTHOR FIX: BooksToScrape doesn't have authors on the main page.
+                # We will use the AI to "invent" a realistic author or extract it from the description
+                # For now, let's set a distinct placeholder so we know it's working
+                author = "Author Pending"
+
                 obj, created = Book.objects.get_or_create(
-                    url=link,
+                    title=title,
                     defaults={
-                        "title": title,
-                        "author": "Unknown",
+                        "author": author,
                         "rating": rating,
-                        "description": f"{title} is a book found on Books to Scrape. It has a rating of {rating} stars.",
+                        "description": description,
+                        "image_url": img_url,
+                        "url": link
                     }
                 )
-                if created:
+                if not created:
+                    # Update image URL and description for existing books if they are likely thumbnails
+                    if not obj.image_url or "media/cache" in obj.image_url:
+                        obj.image_url = img_url
+                        obj.description = description
+                        obj.save()
+                else:
                     scraped_count += 1
             
         print(f"Scraped {scraped_count} new books successfully via Selenium.")
@@ -87,16 +127,29 @@ def fallback_scrape(max_pages=5):
                 relative_link = book.h3.a["href"]
                 link = f"https://books.toscrape.com/catalogue/{relative_link}"
                 
+                # Image fallback - constructing the detail page URL and then the image URL
+                # The image URL on the detail page is predictable:
+                # Thumbnail: ../../media/cache/2c/da/2cdad67c44b002e7ead0cc35693c0e8b.jpg
+                # It's usually the same file just referenced differently.
+                # Let's try to get a better one if possible or just use the absolute path.
+                relative_img = book.find("img")["src"]
+                img_url = relative_img.replace("../..", "https://books.toscrape.com")
+                
                 obj, created = Book.objects.get_or_create(
-                    url=link, 
+                    title=title, 
                     defaults={
-                        "title": title,
+                        "url": link,
                         "author": "Unknown", 
                         "rating": 4.0, 
                         "description": f"{title} is a book.", 
+                        "image_url": img_url
                     }
                 )
-                if created:
+                if not created:
+                    if not obj.image_url or "media/cache" in obj.image_url:
+                        obj.image_url = img_url
+                        obj.save()
+                else:
                     scraped_count += 1
         print(f"Fallback Scraping Successful: {scraped_count} new books.")
     except Exception as e:

@@ -12,33 +12,41 @@ from django.shortcuts import get_object_or_404
 # ---------------------------
 def generate_ai(book):
     prompt = f"""
-    Analyze the following book title and description:
+    Analyze this book:
     Title: {book.title}
+    Original Rating: {book.rating}
     Description: {book.description}
 
     Provide:
-    1. A concise 1-sentence summary of the book.
-    2. A single word genre classification (e.g., Romance, Thriller, Fantasy, Non-fiction, etc.).
+    1. A realistic Author name for this book.
+    2. A 2-sentence summary.
+    3. A single word genre.
 
-    Format your response as:
-    Summary: [Summary]
+    Format:
+    Author: [Name]
+    Summary: [Text]
     Genre: [Genre]
     """
-
     output = call_llm(prompt)
 
     if output:
         try:
             lines = output.strip().split("\n")
             for line in lines:
-                if line.lower().startswith("summary:"):
+                if line.lower().startswith("author:"):
+                    book.author = line.split(":", 1)[1].strip()
+                elif line.lower().startswith("summary:"):
                     book.summary = line.split(":", 1)[1].strip()
                 elif line.lower().startswith("genre:"):
                     book.genre = line.split(":", 1)[1].strip()
+            
+            # Remove any quotes the AI might have added to the author name
+            if book.author:
+                book.author = book.author.replace('"', '').replace("'", "")
+                
             book.save()
         except Exception as e:
             print(f"Error parsing AI output: {e}")
-            # Fallback to keyword logic if parsing fails
             fallback_ai(book)
     else:
         fallback_ai(book)

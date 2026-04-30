@@ -26,17 +26,29 @@ def cosine_similarity(v1, v2):
 # ---------------------------
 def get_embedding(text):
     try:
+        # Limit text length to avoid token limit issues in some models
+        text = text[:1000]
         response = requests.post(
             f"{LM_STUDIO_URL}/embeddings",
             json={
                 "input": text,
-                "model": "text-embedding-nomic-embed-text-v1.5"
+                "model": "nomic-ai/nomic-embed-text-v1.5-GGUF"
             },
             timeout=30
         )
         if response.status_code == 200:
             return response.json()['data'][0]['embedding']
         else:
+            # Try a second time with a more generic model name if the first one fails
+            response = requests.post(
+                f"{LM_STUDIO_URL}/embeddings",
+                json={
+                    "input": text,
+                },
+                timeout=30
+            )
+            if response.status_code == 200:
+                return response.json()['data'][0]['embedding']
             print(f"Embedding API Error: {response.status_code} - {response.text}")
     except Exception as e:
         print(f"Embedding Exception: {e}")
@@ -54,17 +66,25 @@ def call_llm(messages):
         response = requests.post(
             f"{LM_STUDIO_URL}/chat/completions",
             json={
-                "model": "mistralai/mistral-7b-instruct-v0.3",
                 "messages": messages,
                 "temperature": 0.7
             },
-            timeout=120
+            timeout=300
         )
         if response.status_code == 200:
             data = response.json()
-            return data['choices'][0]['message']['content']
+            # Handle potential variation in response structure from different LLM servers
+            if 'choices' in data and len(data['choices']) > 0:
+                choice = data['choices'][0]
+                if 'message' in choice and 'content' in choice['message']:
+                    return choice['message']['content']
+                elif 'text' in choice:
+                    return choice['text']
+            return None
         else:
             print(f"LLM API Error: {response.status_code} - {response.text}")
+    except requests.exceptions.Timeout:
+        print("LLM Error: Request timed out. LM Studio might be overloaded.")
     except Exception as e:
         print(f"LLM Exception: {e}")
     return None
