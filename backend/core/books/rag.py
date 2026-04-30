@@ -163,7 +163,10 @@ def ask_question(question):
 You are a helpful book assistant. Use the following context to answer the user's question.
 If the answer isn't in the context, say you don't know based on the current library.
 
-IMPORTANT: Cite your sources by mentioning the book title in brackets like [Book Title].
+IMPORTANT: 
+1. Cite your sources by mentioning the book title in brackets like [Book Title].
+2. Use multiple paragraphs for long answers to make them readable.
+3. Be professional and insightful.
 
 Context:
 {context_text}
