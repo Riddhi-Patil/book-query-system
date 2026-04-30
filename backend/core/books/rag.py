@@ -67,7 +67,8 @@ def call_llm(messages):
             f"{LM_STUDIO_URL}/chat/completions",
             json={
                 "messages": messages,
-                "temperature": 0.7
+                "temperature": 0.1, # Lowest temperature = fastest processing
+                "max_tokens": 150    # Shortest response = fastest generation
             },
             timeout=300
         )
@@ -145,34 +146,23 @@ def ask_question(question):
         # Sort by score descending
         similarities.sort(key=lambda x: x[0], reverse=True)
         
-        # Take top 5
-        top_results = similarities[:5]
+        # Take only the TOP match for absolute maximum speed
+        top_results = similarities[:1]
         
         context_with_sources = []
         for score, book in top_results:
-            # Only include if score is reasonable (e.g. > 0.3)
-            if score > 0.2:
-                context_with_sources.append(f"Content: {book.title}. {book.description}\nSource: {book.title}")
+            if score > 0.1:
+                # Use only the title and a snippet of the description
+                snippet = book.description[:300]
+                context_with_sources.append(f"Book: {book.title}\nInfo: {snippet}")
 
         if not context_with_sources:
-            return "I found some books, but none seem relevant to your question. Try asking something else about books!"
+            return "No matching books found. Try a different topic!"
 
         context_text = "\n\n".join(context_with_sources)
 
-        prompt = f"""
-You are a helpful book assistant. Use the following context to answer the user's question.
-If the answer isn't in the context, say you don't know based on the current library.
-
-IMPORTANT: 
-1. Cite your sources by mentioning the book title in brackets like [Book Title].
-2. Use multiple paragraphs for long answers to make them readable.
-3. Be professional and insightful.
-
-Context:
-{context_text}
-
-User Question: {question}
-"""
+        # Ultra-short prompt for speed
+        prompt = f"Using this: {context_text}\n\nAnswer briefly: {question}"
 
         answer = call_llm(prompt)
         return answer.strip() if answer else "AI failed to respond. Check if LM Studio is busy."

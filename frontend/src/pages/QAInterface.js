@@ -5,6 +5,7 @@ const QAInterface = () => {
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('Thinking...');
 
   const askQuestion = async (e) => {
     e.preventDefault();
@@ -12,6 +13,15 @@ const QAInterface = () => {
 
     setLoading(true);
     setAnswer('');
+    
+    // Cycle through status messages to keep the user engaged
+    const messages = ['Searching collection...', 'Reading book details...', 'Synthesizing answer...'];
+    let i = 0;
+    const interval = setInterval(() => {
+      setStatus(messages[i % messages.length]);
+      i++;
+    }, 3000);
+
     try {
       // Increased timeout to 5+ minutes for local LLMs
       const res = await axios.post('http://127.0.0.1:8000/ask/', { question }, { timeout: 310000 });
@@ -19,12 +29,14 @@ const QAInterface = () => {
     } catch (err) {
       console.error(err);
       if (err.code === 'ECONNABORTED') {
-        setAnswer('Error: AI took too long to respond. Please try a simpler question or check if LM Studio is busy.');
+        setAnswer('Error: AI took too long to respond. Please check if LM Studio is busy or try a simpler question.');
       } else {
         setAnswer('Error: Backend connection failed. The server might be restarting.');
       }
     } finally {
+      clearInterval(interval);
       setLoading(false);
+      setStatus('Thinking...');
     }
   };
 
@@ -71,7 +83,7 @@ const QAInterface = () => {
                       {loading ? (
                         <>
                           <div className="animate-spin h-5 w-5 border-3 border-current border-t-transparent rounded-full"></div>
-                          <span>Thinking...</span>
+                          <span>{status}</span>
                         </>
                       ) : (
                         <>
