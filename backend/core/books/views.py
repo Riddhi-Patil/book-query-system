@@ -99,7 +99,8 @@ def upload_books(request):
 
         print("--- UPDATING VECTOR MEMORY ---")
         try:
-            index_books(books_to_process)
+            # Index all books that need embeddings (more robust)
+            index_books()
         except Exception as idx_err:
             print(f"Indexing error (continuing): {idx_err}")
         

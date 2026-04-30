@@ -1,25 +1,25 @@
-import chromadb
+import os
 import requests
+import numpy as np
 from .models import Book
 
 # ---------------------------
 # CONFIG
 # ---------------------------
-CHROMA_PATH = "chroma_db"
 LM_STUDIO_URL = "http://127.0.0.1:1234/v1"
 
-# Global singleton for ChromaDB client to prevent "Access Violation" crashes on Windows
-_CHROMA_CLIENT = None
-
-def get_collection():
-    global _CHROMA_CLIENT
-    if _CHROMA_CLIENT is None:
-        try:
-            _CHROMA_CLIENT = chromadb.PersistentClient(path=CHROMA_PATH)
-        except Exception as e:
-            print(f"CRITICAL: Failed to initialize ChromaDB: {e}")
-            raise e
-    return _CHROMA_CLIENT.get_or_create_collection(name="books")
+# ---------------------------
+# VECTOR MATH HELPER
+# ---------------------------
+def cosine_similarity(v1, v2):
+    v1 = np.array(v1)
+    v2 = np.array(v2)
+    dot_product = np.dot(v1, v2)
+    norm_v1 = np.linalg.norm(v1)
+    norm_v2 = np.linalg.norm(v2)
+    if norm_v1 == 0 or norm_v2 == 0:
+        return 0
+    return dot_product / (norm_v1 * norm_v2)
 
 # ---------------------------
 # EMBEDDING HELPER
@@ -32,7 +32,7 @@ def get_embedding(text):
                 "input": text,
                 "model": "text-embedding-nomic-embed-text-v1.5"
             },
-            timeout=30 # Increased timeout
+            timeout=30
         )
         if response.status_code == 200:
             return response.json()['data'][0]['embedding']
@@ -45,18 +45,20 @@ def get_embedding(text):
 # ---------------------------
 # LLM CALLER
 # ---------------------------
-def call_llm(prompt):
+def call_llm(messages):
     try:
+        # If passed a string, convert to message format
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+            
         response = requests.post(
             f"{LM_STUDIO_URL}/chat/completions",
             json={
                 "model": "mistralai/mistral-7b-instruct-v0.3",
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": messages,
                 "temperature": 0.7
             },
-            timeout=120 # Higher timeout for heavy RAG queries
+            timeout=120
         )
         if response.status_code == 200:
             data = response.json()
@@ -71,34 +73,30 @@ def call_llm(prompt):
 # INDEXING
 # ---------------------------
 def index_books(books_to_index=None):
-    print("--- STARTING INDEXING ---")
-    try:
-        collection = get_collection()
-    except:
-        return
-        
+    print("--- STARTING INDEXING (SQLITE) ---")
+    
     if books_to_index is None:
-        books_to_index = Book.objects.all()
+        # Index all books that don't have embeddings yet
+        books_to_index = Book.objects.filter(embedding__isnull=True)
     
     total = books_to_index.count()
+    if total == 0:
+        print("No new books to index.")
+        return
+
+    print(f"Found {total} books to index.")
+    
     for i, book in enumerate(books_to_index):
         try:
-            # Quick check if already indexed
-            existing = collection.get(ids=[str(book.id)])
-            if existing and existing['ids']:
-                continue
-                
             print(f"Indexing ({i+1}/{total}): {book.title}")
             text = f"{book.title}. {book.description}"
             embedding = get_embedding(text)
             
             if embedding:
-                collection.add(
-                    ids=[str(book.id)],
-                    embeddings=[embedding],
-                    documents=[text],
-                    metadatas=[{"title": book.title, "id": book.id}]
-                )
+                book.embedding = embedding
+                book.save()
+            else:
+                print(f"Failed to get embedding for: {book.title}")
         except Exception as e:
             print(f"Skipping book {book.id} due to indexing error: {e}")
             
@@ -109,29 +107,35 @@ def index_books(books_to_index=None):
 # ---------------------------
 def ask_question(question):
     try:
-        collection = get_collection()
         query_embedding = get_embedding(question)
-        
         if not query_embedding:
             return "Error: Could not generate embeddings. Is LM Studio running?"
 
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=5
-        )
-
-        context = results['documents']
-        metadatas = results['metadatas']
-
-        if not context or not context[0]:
+        # Get all books with embeddings
+        books = Book.objects.exclude(embedding__isnull=True)
+        if not books.exists():
             return "I don't have any book data in my memory yet. Please click 'Scrape' on the Dashboard first!"
 
+        # Calculate similarities
+        similarities = []
+        for book in books:
+            score = cosine_similarity(query_embedding, book.embedding)
+            similarities.append((score, book))
+
+        # Sort by score descending
+        similarities.sort(key=lambda x: x[0], reverse=True)
+        
+        # Take top 5
+        top_results = similarities[:5]
+        
         context_with_sources = []
-        for i in range(len(context[0])):
-            doc = context[0][i]
-            meta = metadatas[0][i]
-            source = meta.get('title', 'Unknown Source')
-            context_with_sources.append(f"Content: {doc}\nSource: {source}")
+        for score, book in top_results:
+            # Only include if score is reasonable (e.g. > 0.3)
+            if score > 0.2:
+                context_with_sources.append(f"Content: {book.title}. {book.description}\nSource: {book.title}")
+
+        if not context_with_sources:
+            return "I found some books, but none seem relevant to your question. Try asking something else about books!"
 
         context_text = "\n\n".join(context_with_sources)
 
@@ -152,28 +156,34 @@ User Question: {question}
             
     except Exception as e:
         print(f"RAG Error: {e}")
-        return "The AI system is currently unavailable. Please wait a moment."
+        return f"The AI system encountered an error: {str(e)}"
 
 # ---------------------------
 # RECOMMENDATIONS
 # ---------------------------
 def recommend_books(book_id):
     try:
-        collection = get_collection()
         book = Book.objects.get(id=book_id)
-        text = f"{book.title}. {book.description}"
-        embedding = get_embedding(text)
-        
-        if not embedding:
+        if not book.embedding:
+            # Try to index it on the fly
+            text = f"{book.title}. {book.description}"
+            book.embedding = get_embedding(text)
+            book.save()
+            
+        if not book.embedding:
             return []
 
-        results = collection.query(
-            query_embeddings=[embedding],
-            n_results=4
-        )
+        # Get all other books with embeddings
+        other_books = Book.objects.exclude(id=book.id).exclude(embedding__isnull=True)
         
-        titles = [m['title'] for m in results['metadatas'][0] if m['title'] != book.title]
-        return titles[:3]
+        similarities = []
+        for other in other_books:
+            score = cosine_similarity(book.embedding, other.embedding)
+            similarities.append((score, other.title))
+
+        similarities.sort(key=lambda x: x[0], reverse=True)
+        return [title for score, title in similarities[:3]]
+        
     except Exception as e:
         print(f"Recommendation Error: {e}")
         return []
